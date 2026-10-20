@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
@@ -124,13 +123,9 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
-    return switch (builtin.target.os.tag) {
-        .macos => "MacIntel",
-        .windows => "Win32",
-        .linux => "Linux x86_64",
-        .freebsd => "FreeBSD",
-        else => "Unknown",
-    };
+    // Matches the Windows User-Agent default; a platform that disagrees
+    // with the UA is itself a bot signal.
+    return "Win32";
 }
 
 /// Returns whether Java is enabled (always false)

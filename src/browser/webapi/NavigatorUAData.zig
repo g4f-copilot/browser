@@ -16,8 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const builtin = @import("builtin");
-
 const Config = @import("../../Config.zig");
 const js = @import("../js/js.zig");
 const Execution = js.Execution;
@@ -93,28 +91,18 @@ fn brandList() []const Brand {
 }
 
 fn uaPlatform() []const u8 {
-    return switch (builtin.target.os.tag) {
-        .macos => "macOS",
-        .windows => "Windows",
-        .linux => "Linux",
-        .freebsd => "FreeBSD",
-        else => "Unknown",
-    };
+    // Matches the Windows User-Agent and Sec-Ch-Ua-Platform defaults.
+    return "Windows";
 }
 
 fn uaArchitecture() []const u8 {
-    return switch (builtin.target.cpu.arch) {
-        .x86, .x86_64 => "x86",
-        .aarch64, .aarch64_be, .arm, .armeb => "arm",
-        else => "",
-    };
+    // Matches the "Win64; x64" User-Agent default.
+    return "x86";
 }
 
 fn uaBitness() []const u8 {
-    return switch (builtin.target.cpu.arch) {
-        .x86_64, .aarch64, .aarch64_be, .powerpc64, .powerpc64le, .riscv64 => "64",
-        else => "32",
-    };
+    // Matches the "Win64; x64" User-Agent default.
+    return "64";
 }
 
 pub const JsApi = struct {

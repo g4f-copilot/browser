@@ -178,7 +178,9 @@
     console.warn('Pending count:', Array.from(async_pending.keys()));
   }
 
-  const IS_TEST_RUNNER = window.navigator.userAgent.startsWith("Lightpanda/");
+  // The test runner appends --user-agent-suffix internal-tester to the
+  // default Chrome UA, so the suffix is what identifies it.
+  const IS_TEST_RUNNER = window.navigator.userAgent.includes("internal-tester");
 
   window.testing = {
     fail: fail,

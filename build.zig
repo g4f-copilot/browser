@@ -433,6 +433,13 @@ fn linkRust(b: *Build, mod: *Build.Module, deps: Deps) void {
         "--manifest-path", "src/rust/ffi/Cargo.toml",
     });
 
+    // Cross-compiling needs `--target`; without it cargo builds for the host
+    // and the archive fails to link. The rustc wrapper that points at a
+    // sysroot holding the target's std is the caller's job (RUSTC/RUSTFLAGS).
+    const cross = !deps.target.query.isNative();
+    const rust_triple = if (cross) rustTriple(b, deps.target) else null;
+    if (rust_triple) |triple| exec_cargo.addArgs(&.{ "--target", triple });
+
     addDirInputs(b, exec_cargo, "src/rust", "target") catch |err| {
         std.debug.panic("walk src/rust: {t}", .{err});
     };
@@ -448,8 +455,36 @@ fn linkRust(b: *Build, mod: *Build.Module, deps: Deps) void {
     const rust_step = b.step("rust", "Build the Rust staticlib (requires cargo)");
     rust_step.dependOn(&exec_cargo.step);
 
-    const obj = out_dir.path(b, out_subdir).path(b, "liblightpanda_ffi.a");
+    // `--target` nests the output one level deeper: <target-dir>/<triple>/<profile>.
+    const obj = if (rust_triple) |triple|
+        out_dir.path(b, triple).path(b, out_subdir).path(b, "liblightpanda_ffi.a")
+    else
+        out_dir.path(b, out_subdir).path(b, "liblightpanda_ffi.a");
     mod.addObjectFile(obj);
+}
+
+/// Rust target triple for a Zig target, or null when Rust has no such target.
+fn rustTriple(b: *Build, target: Build.ResolvedTarget) ?[]const u8 {
+    const arch = switch (target.result.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
+        .arm => "arm",
+        .riscv64 => "riscv64",
+        else => return null,
+    };
+    const vendor, const os, const env = switch (target.result.os.tag) {
+        .linux => .{ "unknown", "linux", switch (target.result.abi) {
+            .musl, .musleabi, .musleabihf, .muslx32 => "musl",
+            else => "gnu",
+        } },
+        .macos => .{ "apple", "darwin", "" },
+        .windows => .{ "pc", "windows", switch (target.result.abi) {
+            .msvc => "msvc",
+            else => "gnu",
+        } },
+        else => return null,
+    };
+    return std.fmt.allocPrint(b.allocator, "{s}-{s}-{s}-{s}", .{ arch, vendor, os, env }) catch @panic("OOM");
 }
 
 /// Registers every file under `root` (relative to the build root) as an

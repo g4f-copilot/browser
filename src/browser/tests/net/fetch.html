@@ -554,10 +554,11 @@
       testing.expectEqual('fr', got['accept-language']);
       testing.expectEqual('a, b', got['x-multi']);
       testing.expectEqual(undefined, got['cookie']);
-      testing.expectEqual(true, got['user-agent'].includes('Lightpanda'));
-      testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
-      testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
-      testing.expectEqual(false, got['sec-ch-ua'].includes('Chromium'));
+      testing.expectEqual('Mozilla/5.0 (X11; Linux x86_64)', got['user-agent']);
+      testing.expectEqual(true, got['sec-ch-ua'].includes('Chromium'));
+      testing.expectEqual(true, got['sec-ch-ua'].includes('Google Chrome'));
+      testing.expectEqual('?0', got['sec-ch-ua-mobile']);
+      testing.expectEqual('"Windows"', got['sec-ch-ua-platform']);
     });
   }
 </script>

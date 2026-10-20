@@ -473,11 +473,12 @@ pub fn getLanguages(self: *const Client) []const []const u8 {
 }
 
 // Headers _all_ requests include.
-pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
+pub fn baselineHeaders(self: *const Client) [5]Transfer.RequestHeader {
     return .{
         .{ .name = "User-Agent", .value = self.getUserAgent() },
         .{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua, .source = .fixed },
-        .{ .name = "Sec-Ch-Ua-Full-Version-List", .value = lp.Config.HttpHeaders.sec_ch_ua_full_version_list, .source = .fixed },
+        .{ .name = "Sec-Ch-Ua-Mobile", .value = lp.Config.HttpHeaders.sec_ch_ua_mobile, .source = .fixed },
+        .{ .name = "Sec-Ch-Ua-Platform", .value = lp.Config.HttpHeaders.sec_ch_ua_platform, .source = .fixed },
         // Omitting Accept-Language triggers bot-protection on some CDNs
         // (Akamai) when Accept-Encoding is present.
         .{ .name = "Accept-Language", .value = self.getAcceptLanguage() },
@@ -5338,12 +5339,12 @@ test "HttpClient: Transfer header layering" {
     try testing.expectEqual("\"Lightpanda\";v=\"1\"", transfer.findRequestHeader("sec-ch-ua").?);
 
     // an invalid User-Agent never enters the list
-    try transfer.setHeader("user-agent", "Mozilla/5.0", .{ .source = .author });
+    try transfer.setHeader("user-agent", "bad\x01ua", .{ .source = .author });
     try testing.expectEqual("Lightpanda/1.0", transfer.findRequestHeader("user-agent").?);
 
-    // a valid author User-Agent replaces the default
-    try transfer.setHeader("User-Agent", "MyBot/2.0", .{ .source = .author });
-    try testing.expectEqual("MyBot/2.0", transfer.findRequestHeader("user-agent").?);
+    // a valid author User-Agent replaces the default, Mozilla included
+    try transfer.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0)", .{ .source = .author });
+    try testing.expectEqual("Mozilla/5.0 (Windows NT 10.0)", transfer.findRequestHeader("user-agent").?);
 }
 
 test "HttpClient: Fetch header overrides restore after one hop" {

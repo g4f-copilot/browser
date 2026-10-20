@@ -102,6 +102,15 @@ fn logFormatValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?
     log.opts.format = format;
 }
 
+/// Client-hint headers emitted from the fixed baseline layer in
+/// `HttpClient.baselineHeaders`. Kept here so the CLI validator and the
+/// baseline cannot disagree about what is overridable.
+pub const fixed_header_names = [_][]const u8{
+    "Sec-Ch-Ua",
+    "Sec-Ch-Ua-Mobile",
+    "Sec-Ch-Ua-Platform",
+};
+
 fn httpHeaderValidator(allocator: Allocator, args: *std.process.Args.Iterator, list: *std.ArrayList(HttpHeader)) !void {
     const str = args.next() orelse return error.MissingArgument;
     const header = HttpHeader.parse(str) orelse {
@@ -126,9 +135,13 @@ fn httpHeaderValidator(allocator: Allocator, args: *std.process.Args.Iterator, l
         return error.InvalidArgument;
     }
 
-    if (std.ascii.eqlIgnoreCase(header.name, "Sec-Ch-Ua")) {
-        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "Sec-Ch-Ua is not overridable" });
-        return error.InvalidArgument;
+    // These are emitted from the fixed baseline layer, so a --http-header
+    // value for them would be silently dropped. Reject it instead.
+    for (fixed_header_names) |name| {
+        if (std.ascii.eqlIgnoreCase(header.name, name)) {
+            log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "client hints are not overridable" });
+            return error.InvalidArgument;
+        }
     }
 
     try list.append(allocator, .{
@@ -1053,7 +1066,16 @@ pub const WaitUntil = enum {
 /// HTTP header values shared across Http and Client.
 /// Must be initialized with an allocator that outlives all HTTP connections.
 pub const HttpHeaders = struct {
-    const user_agent_base: [:0]const u8 = "Lightpanda/1.0";
+    /// Chrome release the default User-Agent and client hints impersonate.
+    /// Bump this (and nothing else) to move the whole default fingerprint.
+    pub const chrome_version: [:0]const u8 = "152";
+
+    /// Default User-Agent. A plain Chrome UA rather than a Lightpanda one:
+    /// sites routinely serve degraded markup or block outright on an
+    /// unknown product token. --user-agent replaces it wholesale.
+    const user_agent_base: [:0]const u8 =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" ++
+        chrome_version ++ ".0.0.0 Safari/537.36";
 
     const Brand = struct {
         brand: [:0]const u8,
@@ -1063,10 +1085,21 @@ pub const HttpHeaders = struct {
 
     /// Source of truth for client-hints brand data. Both the Sec-Ch-Ua
     /// HTTP header and navigator.userAgentData.brands derive from this
-    /// list, so the two sides cannot drift.
+    /// list, so the two sides cannot drift. Chrome's own ordering: the
+    /// real brands first, the GREASE entry last.
     pub const brands = [_]Brand{
-        .{ .brand = "Lightpanda", .version = "1", .full_version = lp.build_config.version },
+        .{ .brand = "Chromium", .version = chrome_version, .full_version = chrome_version ++ ".0.0.0" },
+        .{ .brand = "Google Chrome", .version = chrome_version, .full_version = chrome_version ++ ".0.0.0" },
+        .{ .brand = "Not.A/Brand", .version = "99", .full_version = "99.0.0.0" },
     };
+
+    /// Sec-Ch-Ua-Mobile. Always "?0": the default UA is a desktop one.
+    pub const sec_ch_ua_mobile: [:0]const u8 = "?0";
+
+    /// Sec-Ch-Ua-Platform, quoted the way Chrome sends it. Always "Windows"
+    /// so it agrees with the Windows User-Agent above; a mismatch between
+    /// the two is itself a bot signal.
+    pub const sec_ch_ua_platform: [:0]const u8 = "\"Windows\"";
 
     pub const sec_ch_ua: [:0]const u8 = blk: {
         var out: [:0]const u8 = "";
@@ -1094,7 +1127,7 @@ pub const HttpHeaders = struct {
     // Document-navigation Accept value Chrome sends.
     pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
-    user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
+    user_agent: [:0]const u8, // User agent value (defaults to the Chrome UA)
 
     proxy_bearer_header: ?[:0]const u8,
 
@@ -1409,11 +1442,14 @@ test "Config: advertiseHost preserves concrete host when not a wildcard" {
     try std.testing.expectEqualStrings("127.0.0.1", config.advertiseHost());
 }
 
-test "Config: parseArgs refuses a mozilla user-agent" {
-    log.expectLog(&.{.app});
-    const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--user-agent", "mozilla/1.0" };
+test "Config: parseArgs accepts a browser-impersonating user-agent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const argv = [_][*:0]const u8{ "lightpanda", "fetch", "https://example.com", "--user-agent", "Mozilla/5.0 (X11; Linux x86_64)" };
     const proc_args: std.process.Args = .{ .vector = &argv };
-    try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    const config = try parseArgs(arena.allocator(), proc_args);
+    try std.testing.expectEqualStrings("Mozilla/5.0 (X11; Linux x86_64)", config.userAgent().?);
 }
 
 test "Config: parseArgs --http-version" {
@@ -1518,8 +1554,8 @@ test "Config: parseArgs tells a url from a misspelt command" {
 
 test "Config: validateUserAgent" {
     try validateUserAgent("Lightpanda/1.0");
-    try std.testing.expectError(error.Reserved, validateUserAgent("mozilla/1.0"));
-    try std.testing.expectError(error.Reserved, validateUserAgent("Mozilla/5.0"));
+    try validateUserAgent("mozilla/1.0");
+    try validateUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
     try std.testing.expectError(error.NonPrintable, validateUserAgent("bad\x01ua"));
 }
 
@@ -1631,6 +1667,8 @@ test "Config: parseArgs refuses an invalid --http-header" {
         // reserved names have their own flag, or none at all
         "User-Agent: Custom/1.0",
         "Sec-Ch-Ua: \"Chromium\";v=\"140\"",
+        "Sec-Ch-Ua-Mobile: ?1",
+        "Sec-Ch-Ua-Platform: \"Linux\"",
     };
 
     for (invalid) |header| {
@@ -1727,22 +1765,21 @@ fn accumulateValidator(allocator: Allocator, args: *std.process.Args.Iterator, f
 fn userAgentValidator(allocator: Allocator, args: *std.process.Args.Iterator, ua: *?[]const u8) !void {
     const str = args.next() orelse return error.MissingArgument;
     validateUserAgent(str) catch |err| {
-        log.fatal(.app, "invalid user-agent", .{ .err = err, .hint = "must be printable ASCII and can't contain Mozilla" });
+        log.fatal(.app, "invalid user-agent", .{ .err = err, .hint = "must be printable ASCII" });
         return error.InvalidArgument;
     };
 
     ua.* = try allocator.dupe(u8, str);
 }
 
+/// Any printable ASCII value is accepted, including a browser-impersonating
+/// one: the default User-Agent is already a Chrome UA, so refusing Mozilla
+/// here would only block the caller from picking a different browser.
 pub fn validateUserAgent(ua: []const u8) !void {
     for (ua) |c| {
         if (!std.ascii.isPrint(c)) {
             return error.NonPrintable;
         }
-    }
-
-    if (std.ascii.findIgnoreCase(ua, "mozilla") != null) {
-        return error.Reserved;
     }
 }
 
